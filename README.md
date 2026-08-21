@@ -7,6 +7,15 @@ driving dimensions and equations, exporting, and inspecting mass properties.
 **Windows only.** SolidWorks automation goes through Windows COM — this
 must run on the same machine where SolidWorks 2022 is installed and licensed.
 
+## Quick start (recommended)
+
+Download the [latest release](https://github.com/blussyya/solidworks-mcp/releases/latest) and run `setup.bat` — it auto-detects your Python and SolidWorks installs, installs dependencies, and configures your client. Done in one click.
+
+Or manually:
+```
+powershell -ExecutionPolicy Bypass -File setup.ps1
+```
+
 ## Client support
 
 This repo ships the same MCP server for two AI clients:

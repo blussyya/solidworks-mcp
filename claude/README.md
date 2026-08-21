@@ -27,6 +27,10 @@ install rather than a guess baked into this code.
 
 ## Setup
 
+**Easiest way:** download the [latest release](https://github.com/blussyya/solidworks-mcp/releases/latest) and run `setup.bat`. It detects everything and configures Claude Desktop for you.
+
+Or manually:
+
 1. **Python on Windows.** 3.10+, installed on the same Windows machine as
    SolidWorks 2022 (not WSL — WSL can't reach Windows COM objects).
 2. Open a terminal in this folder and install dependencies:
