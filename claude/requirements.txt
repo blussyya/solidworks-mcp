@@ -1,0 +1,7 @@
+# Pinned to a version verified to expose mcp.server.fastmcp.FastMCP —
+# mcp 2.0.0 renamed/restructured this (MCPServer, different module layout),
+# so don't casually bump this without re-checking server.py still imports.
+mcp[cli]==1.29.0
+
+# SolidWorks COM automation (Windows only).
+pywin32>=306
