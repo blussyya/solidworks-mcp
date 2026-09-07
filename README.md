@@ -1,3 +1,4 @@
+[![M8ven Live Monitored](https://m8ven.ai/badge/mcp/blussyya-solidworks-mcp-3oq9wh?variant=verified)](https://m8ven.ai/mcp/blussyya-solidworks-mcp-3oq9wh?variant=verified)
 # solidworks-mcp
 
 An MCP server that drives SolidWorks 2022 directly from AI assistants —
