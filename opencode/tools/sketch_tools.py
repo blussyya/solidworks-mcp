@@ -8,6 +8,7 @@ not in free 3D space.
 """
 
 import json
+import types
 from typing import List, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -15,6 +16,32 @@ from pydantic import BaseModel, ConfigDict, Field
 from connection import sw, get_const
 
 MM = 0.001  # SolidWorks API units are meters; we expose millimeters to the caller.
+
+
+def _member(obj, name):
+    """Read a COM member that may or may not still need calling.
+
+    With a typed wrapper a zero-arg method arrives as a bound method; on the
+    late-bound fallback, attribute access has *already* invoked it, because
+    pywin32's dynamic dispatch can't tell a zero-argument method from a
+    property. Writing `obj.Member()` directly therefore invokes twice, and the
+    second invocation raises "Member not found".
+
+    Testing plain callable() is not enough either: pywin32 CDispatch objects
+    define __call__, so a member returning a COM object (GetNextFeature) looks
+    callable and would be invoked again. Verified against SolidWorks 2022:
+
+        getattr(feat, "Name")           -> str        (already invoked)
+        getattr(feat, "GetTypeName2")   -> str        (already invoked)
+        getattr(feat, "GetNextFeature") -> CDispatch  (callable, must NOT call)
+
+    So: only call values that are genuinely Python methods or functions.
+    """
+    value = getattr(obj, name)
+    if isinstance(value, (types.MethodType, types.FunctionType,
+                          types.BuiltinFunctionType, types.BuiltinMethodType)):
+        return value()
+    return value
 
 
 def _active_sketch_manager(model):
@@ -96,36 +123,42 @@ def register(mcp) -> None:
         sketch_mgr = model.SketchManager
         if sketch_mgr.ActiveSketch is None:
             return json.dumps({"exited": False, "note": "No sketch was active."})
-        # ActiveSketch.Name fails on late-bound ISketch; grab from feature tree instead
+
+        # Exit FIRST. Working out the sketch's name is best-effort, and a
+        # failure in that lookup must never leave the model stuck in sketch
+        # mode — which is exactly what happened when the walk below raised a
+        # com_error that the old `except (TypeError, AttributeError)` didn't
+        # catch, so InsertSketch was never reached.
+        sketch_mgr.InsertSketch(True)
+
+        # The sketch we just finished is the newest ProfileFeature in the
+        # tree, so walk to the end rather than stopping at the first match
+        # (which would report "Sketch1" for every sketch in the document).
         name = None
         try:
-            raw = sketch_mgr.ActiveSketch
-            n = raw.Name
-            if callable(n): n = n()
-            name = n
-        except (AttributeError, TypeError):
-            pass
-        if name is None:
             feat = model.FirstFeature()
             while feat is not None:
                 try:
-                    tname = feat.GetTypeName2()
-                    if callable(tname): tname = tname()
-                except (TypeError, AttributeError):
+                    tname = _member(feat, "GetTypeName2")
+                except Exception:
                     try:
-                        tname = feat.GetTypeName()
-                        if callable(tname): tname = tname()
-                    except (TypeError, AttributeError):
-                        tname = ''
-                if tname == 'ProfileFeature':
-                    n = feat.Name
-                    if callable(n): n = n()
-                    name = n
-                    break
-                feat = feat.GetNextFeature()
+                        tname = _member(feat, "GetTypeName")
+                    except Exception:
+                        tname = ""
+                if tname == "ProfileFeature":
+                    name = _member(feat, "Name")
+                feat = _member(feat, "GetNextFeature")
+        except Exception:
+            pass
+
         if name is None:
-            name = 'Sketch1'
-        sketch_mgr.InsertSketch(True)
+            return json.dumps({
+                "exited": True,
+                "sketch_name": None,
+                "note": "Sketch was exited but its name could not be read from "
+                        "the feature tree; pass the name explicitly to the "
+                        "feature tool.",
+            })
         return json.dumps({"exited": True, "sketch_name": name})
 
     class LineInput(BaseModel):
