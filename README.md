@@ -24,14 +24,15 @@ powershell -ExecutionPolicy Bypass -File setup.ps1
 
 ## Client support
 
-This repo ships the same MCP server for two AI clients:
+This repo ships the same MCP server for three AI clients:
 
 | Client | Directory | Config format |
 |--------|-----------|---------------|
 | [Claude Desktop](https://claude.ai/download) | `claude/` | `claude_desktop_config.json` |
 | [opencode](https://opencode.ai) | `opencode/` | `opencode.jsonc` |
+| [Codex](https://developers.openai.com/codex) | `codex/` | `~/.codex/config.toml` |
 
-Plus a separate server for SolidWorks 2011, usable from either client:
+Plus a separate server for SolidWorks 2011, usable from any client:
 
 | Version | Directory | Registered as | Notes |
 |---------|-----------|---------------|-------|
@@ -64,7 +65,10 @@ solidworks-mcp/
 │   ├── requirements.txt
 │   ├── diagnose.py
 │   └── tools/
-└── sw2011/                      ← SolidWorks 2011 (either client)
+├── codex/                       ← Codex configuration and setup
+│   ├── README.md
+│   └── codex_config.example.toml
+└── sw2011/                      ← SolidWorks 2011 (any client)
     ├── README.md
     ├── claude_desktop_config.example.json
     ├── opencode_config.example.jsonc
@@ -81,6 +85,7 @@ Pick your client and follow its README:
 
 - **Claude Desktop**: [`claude/README.md`](claude/README.md)
 - **opencode**: [`opencode/README.md`](opencode/README.md)
+- **Codex**: [`codex/README.md`](codex/README.md)
 - **SolidWorks 2011**: [`sw2011/README.md`](sw2011/README.md)
 
 All require the same prerequisites: Python 3.10+ and SolidWorks on

@@ -1,5 +1,5 @@
 # SolidWorks MCP — Auto Setup Script
-# Detects Python & SolidWorks, installs deps, configures Claude Desktop and/or opencode.
+# Detects Python & SolidWorks, installs deps, and configures MCP clients.
 # Run: powershell -ExecutionPolicy Bypass -File setup.ps1
 
 $ErrorActionPreference = "Stop"
@@ -94,18 +94,22 @@ Write-Host "    Modern SolidWorks (2012+), registered as 'solidworks':"
 Write-Host "      1) Claude Desktop"
 Write-Host "      2) opencode"
 Write-Host "      3) Both"
+Write-Host "      7) Codex"
+Write-Host "      8) All three clients"
 Write-Host "    SolidWorks 2011, registered separately as 'solidworks2011':"
 Write-Host "      4) Claude Desktop"
 Write-Host "      5) opencode"
 Write-Host "      6) Both"
+Write-Host "      9) Codex"
+Write-Host "     10) All three clients"
 Write-Host ""
 Write-Host "  The two are separate servers with separate tool calls, so you can" -ForegroundColor DarkGray
 Write-Host "  configure both and pick a version per conversation." -ForegroundColor DarkGray
 Write-Host ""
-$choice = Read-Host "  Enter choice (1/2/3/4/5/6)"
+$choice = Read-Host "  Enter choice (1/2/3/4/5/6/7/8/9/10)"
 
 # Which server directory and registered name this choice implies.
-if ($choice -in @("4", "5", "6")) {
+if ($choice -in @("4", "5", "6", "9", "10")) {
     $ServerDir = "sw2011"
     $ServerName = "solidworks2011"
     $ServerLabel = "SolidWorks 2011"
@@ -120,8 +124,9 @@ if ($choice -in @("4", "5", "6")) {
         Write-Host "  WARNING: no SolidWorks 2012+ install detected - configuring anyway." -ForegroundColor DarkYellow
     }
 }
-$wantClaude = $choice -in @("1", "3", "4", "6")
-$wantOpencode = $choice -in @("2", "3", "5", "6")
+$wantClaude = $choice -in @("1", "3", "4", "6", "8", "10")
+$wantOpencode = $choice -in @("2", "3", "5", "6", "8", "10")
+$wantCodex = $choice -in @("7", "8", "9", "10")
 
 # --- Claude Desktop ---
 if ($wantClaude) {
@@ -210,6 +215,32 @@ if ($wantOpencode) {
         Write-Host "  opencode: '$ServerName' config created ($ServerLabel)." -ForegroundColor Green
     }
     Write-Host "    Restart opencode to use the MCP server." -ForegroundColor DarkGray
+}
+
+# --- Codex ---
+if ($wantCodex) {
+    $dir = if ($ServerDir) { $ServerDir } else { "claude" }
+    $serverPy = Join-Path $RepoRoot "$dir\server.py"
+    $codex = (Get-Command codex -ErrorAction SilentlyContinue).Source
+    if (-not $codex) {
+        Write-Host "  ERROR: Codex CLI not found. Install or open the Codex desktop app first." -ForegroundColor Red
+        exit 1
+    }
+
+    # Some restricted shells omit these even though USERPROFILE is present.
+    if (-not $env:HOME) { $env:HOME = $env:USERPROFILE }
+    if (-not $env:HOMEDRIVE) { $env:HOMEDRIVE = Split-Path -Qualifier $env:USERPROFILE }
+    if (-not $env:HOMEPATH) { $env:HOMEPATH = $env:USERPROFILE.Substring($env:HOMEDRIVE.Length) }
+    if (-not $env:CODEX_HOME) { $env:CODEX_HOME = Join-Path $env:USERPROFILE ".codex" }
+
+    & $codex mcp remove $ServerName 2>$null | Out-Null
+    & $codex mcp add $ServerName -- $Python $serverPy
+    if ($LASTEXITCODE -ne 0) {
+        Write-Host "  ERROR: Codex could not register '$ServerName'." -ForegroundColor Red
+        exit $LASTEXITCODE
+    }
+    Write-Host "  Codex: '$ServerName' config updated ($ServerLabel)." -ForegroundColor Green
+    Write-Host "    Restart the Codex desktop app to use the MCP server." -ForegroundColor DarkGray
 }
 
 Write-Host ""

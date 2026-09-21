@@ -1,8 +1,7 @@
 #!/usr/bin/env python3
 """
 solidworks_mcp_2011 — an MCP server exposing SolidWorks 2011 modeling
-automation (sketching, features, dimensions, export, inspection) as tools
-Claude can call.
+automation (sketching, features, dimensions, export, inspection) as MCP tools.
 
 This is the SolidWorks 2011 server. It is pinned to the 2011 line and will
 refuse to attach to anything newer, so it can run alongside the modern
@@ -25,7 +24,17 @@ from tools import (
     inspection_tools,
 )
 
-mcp = FastMCP("solidworks_mcp_2011")
+mcp = FastMCP(
+    "solidworks_mcp_2011",
+    instructions=(
+        "Drive SolidWorks 2011 only through a stateful Windows COM session. Call "
+        "sw_connect before modeling and sw_status when the active document or connection "
+        "is uncertain. Build sketches before features, use returned names for later "
+        "selections, rebuild after parameter changes, and inspect or save the model "
+        "before reporting completion. Dimensions and coordinates are meters unless a "
+        "tool explicitly says otherwise. Use the separate solidworks server for 2012+."
+    ),
+)
 
 session_tools.register(mcp)
 document_tools.register(mcp)
