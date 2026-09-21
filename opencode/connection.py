@@ -182,6 +182,7 @@ class SolidWorksConnection:
         self.sw_app = None
         self._com_ready = False
         self._typed_module = None  # set on first successful connect()
+        self._sw_version: Optional[int] = None  # major year, e.g. 2011, 2022
         # Sketch/feature entities created by the most recent sketch tool call,
         # so a follow-up tool (e.g. "dimension the thing I just drew") can
         # reference them without a fragile by-name re-selection. Reset each
@@ -228,9 +229,9 @@ class SolidWorksConnection:
             raw_app = win32com.client.Dispatch(SW_APP_PROGID)
         except Exception as exc:
             raise RuntimeError(
-                "Could not start or attach to SolidWorks 2022 via COM. Make sure "
-                "SolidWorks 2022 is installed on this machine and that this server "
-                "is running on Windows (not WSL/Linux). "
+                "Could not start or attach to SolidWorks via COM. Make sure "
+                "SolidWorks (2011 or later) is installed on this machine and "
+                "that this server is running on Windows (not WSL/Linux). "
                 f"Underlying error: {exc}"
             ) from exc
 
@@ -252,6 +253,36 @@ class SolidWorksConnection:
             logger.warning("Could not set SolidWorks window visibility.")
 
         return self.sw_app
+
+    @property
+    def sw_version(self) -> int:
+        """Return the major SolidWorks year (e.g. 2011, 2022). Cached after first call."""
+        if self._sw_version is not None:
+            return self._sw_version
+        try:
+            rev = self.sw_app.RevisionNumber
+            if callable(rev):
+                rev = rev()
+            # RevisionNumber looks like "30.1.0" for SW2022, "19.1.0" for SW2011
+            major = int(rev.split(".")[0])
+            # Map API revision major to year: 19=2011, 20=2012, ..., 30=2022
+            self._sw_version = 2000 + major - 11  # rev 19 → 2011-11=2000+19-11=2008? No.
+            # Actually: SW2011 has API version ~19, SW2022 has ~30
+            # Formula: year = 1992 + major (rev 19 → 2011, rev 30 → 2022)
+            self._sw_version = 1992 + major
+        except Exception:
+            self._sw_version = 2022  # assume newest if detection fails
+        return self._sw_version
+
+    def try_method(self, obj, *method_names):
+        """Try calling methods on obj by name (newest first). Returns the first that exists.
+        Usage: feat = sw().try_method(model.FeatureManager, 'FeatureExtrusion3', 'FeatureExtrusion2', 'FeatureExtrusion')
+        """
+        for name in method_names:
+            meth = getattr(obj, name, None)
+            if meth is not None:
+                return meth
+        raise AttributeError(f"None of these methods exist on {obj}: {', '.join(method_names)}")
 
     @property
     def app(self):

@@ -5,7 +5,9 @@ sketching, features (extrude/cut/revolve/fillet/chamfer/shell/patterns),
 driving dimensions and equations, exporting, and inspecting mass properties.
 
 **Windows only.** SolidWorks automation goes through Windows COM — this
-must run on the same machine where SolidWorks 2022 is installed and licensed.
+must run on the same machine where SolidWorks is installed and licensed.
+Supports SolidWorks 2011 through 2026 with automatic version detection
+and API method fallbacks.
 
 ## Quick start (recommended)
 

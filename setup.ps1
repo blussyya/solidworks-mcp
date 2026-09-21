@@ -35,7 +35,7 @@ Write-Host "  Found: $Python ($($pyVersion.Trim()))" -ForegroundColor Green
 Write-Host "[2/4] Detecting SolidWorks..." -ForegroundColor Yellow
 
 $SWPath = $null
-foreach ($ver in 2026..2020) {
+foreach ($ver in 2026..2007) {
     $key = "HKLM:\SOFTWARE\SolidWorks\SolidWorks $ver"
     if (Test-Path $key) {
         $dir = (Get-ItemProperty $key -ErrorAction SilentlyContinue)."Installation Dir"
