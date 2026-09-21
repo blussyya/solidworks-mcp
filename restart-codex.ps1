@@ -10,14 +10,15 @@ if (-not $main) {
     throw "The Codex desktop app is not running. Start it from the Start menu."
 }
 
-$exe = $main.ExecutablePath
-if (-not $exe -or $exe -notmatch '\\OpenAI\.Codex_.*\\app\\ChatGPT\.exe$') {
-    throw "Refusing to stop an unrecognized ChatGPT.exe process: $exe"
+$appId = Get-StartApps |
+    Where-Object { $_.AppID -match '^OpenAI\.Codex_.*!App$' } |
+    Select-Object -First 1 -ExpandProperty AppID
+if (-not $appId) {
+    throw "Could not find the installed Codex app identifier."
 }
 
 Write-Host "Restarting Codex so it reloads MCP configuration..." -ForegroundColor Cyan
-Get-Process -Name ChatGPT -ErrorAction SilentlyContinue | Stop-Process -Force
+& taskkill.exe /PID $main.ProcessId /T /F | Out-Null
 Start-Sleep -Seconds 2
-Start-Process -FilePath $exe
+Start-Process -FilePath explorer.exe -ArgumentList "shell:AppsFolder\$appId"
 Write-Host "Codex restarted." -ForegroundColor Green
-
