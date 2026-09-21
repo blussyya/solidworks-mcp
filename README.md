@@ -1,127 +1,141 @@
-# solidworks-mcp
+# solidworks-mcp (opencode)
 
-An MCP server that drives SolidWorks directly from AI assistants —
-sketching, features (extrude/cut/revolve/fillet/chamfer/shell/patterns),
-driving dimensions and equations, exporting, and inspecting mass properties.
+An MCP server that lets opencode drive SolidWorks 2022 directly — sketching,
+features (extrude/cut/revolve/fillet/chamfer/shell/patterns), driving
+dimensions and equations, exporting, and inspecting mass properties.
 
-**Windows only.** SolidWorks automation goes through Windows COM — this
-must run on the same machine where SolidWorks is installed and licensed.
-
-Two servers ship here, and they are **separate calls**: one for the modern
-line (2012 and newer) and one for SolidWorks 2011, which needs different
-API signatures. Pick a server and you have picked a version — there is no
-runtime sniffing, and neither server will attach to a version it does not
-target.
-
-## Quick start (recommended)
-
-Download the [latest release](https://github.com/blussyya/solidworks-mcp/releases/latest) and run `setup.bat` — it auto-detects your Python and SolidWorks installs, installs dependencies, and configures your client. Done in one click.
-
-Or manually:
-```
-powershell -ExecutionPolicy Bypass -File setup.ps1
-```
-
-## Client support
-
-This repo ships the same MCP server for three AI clients:
-
-| Client | Directory | Config format |
-|--------|-----------|---------------|
-| [Claude Desktop](https://claude.ai/download) | `claude/` | `claude_desktop_config.json` |
-| [opencode](https://opencode.ai) | `opencode/` | `opencode.jsonc` |
-| [Codex](https://developers.openai.com/codex) | `codex/` | `~/.codex/config.toml` |
-
-Plus a separate server for SolidWorks 2011, usable from any client:
-
-| Version | Directory | Registered as | Notes |
-|---------|-----------|---------------|-------|
-| SolidWorks 2012+ | `claude/`, `opencode/` | `solidworks` | Newest install wins |
-| SolidWorks 2011 | `sw2011/` | `solidworks2011` | Older API signatures (`FeatureExtrusion2`, `SelectByID2` variant arguments) |
-
-Register both if you want both — because they use different server names,
-their tools stay distinct and you choose a version per conversation rather
-than hoping the server guessed right.
-
-Each directory has its own README with client-specific setup instructions
-and the same Python source code underneath.
-
-```
-solidworks-mcp/
-├── README.md                    ← you are here
-├── claude/                      ← Claude Desktop (SW2012+)
-│   ├── README.md
-│   ├── claude_desktop_config.example.json
-│   ├── server.py
-│   ├── connection.py
-│   ├── requirements.txt
-│   ├── diagnose.py
-│   └── tools/
-├── opencode/                    ← opencode (SW2012+)
-│   ├── README.md
-│   ├── opencode_config.example.jsonc
-│   ├── server.py
-│   ├── connection.py
-│   ├── requirements.txt
-│   ├── diagnose.py
-│   └── tools/
-├── codex/                       ← Codex configuration and setup
-│   ├── README.md
-│   └── codex_config.example.toml
-└── sw2011/                      ← SolidWorks 2011 (any client)
-    ├── README.md
-    ├── claude_desktop_config.example.json
-    ├── opencode_config.example.jsonc
-    ├── server.py
-    ├── connection.py
-    ├── requirements.txt
-    ├── diagnose.py
-    └── tools/
-```
-
-## Per-directory setup
-
-Pick your client and follow its README:
-
-- **Claude Desktop**: [`claude/README.md`](claude/README.md)
-- **opencode**: [`opencode/README.md`](opencode/README.md)
-- **Codex**: [`codex/README.md`](codex/README.md)
-- **SolidWorks 2011**: [`sw2011/README.md`](sw2011/README.md)
-
-All require the same prerequisites: Python 3.10+ and SolidWorks on
-Windows. Install dependencies with `pip install -r requirements.txt` in the
-appropriate directory.
+**This only works on Windows**, and only on the machine where SolidWorks 2022
+is actually installed and licensed. SolidWorks automation goes through
+Windows COM (the same mechanism VBA macros use) — there's no way to drive it
+remotely or from Linux/macOS.
 
 ## How it works
 
-SolidWorks exposes its entire API over COM natively — no addon required.
-This server attaches to a running SolidWorks instance (or launches one)
-via `pywin32`, and exposes ~30 tools covering the full modeling workflow.
+Unlike Blender (which needs an addon inside Blender exposing a socket),
+SolidWorks exposes its entire API over COM natively. So this server *is* the
+whole bridge — no separate addon to install inside SolidWorks. When a tool
+calls `sw_connect`, the server attaches to a running SolidWorks 2022, or
+launches one if none is open, using
+[`pywin32`](https://github.com/mhammond/pywin32).
 
-API enum constants are pulled live from your installed SolidWorks type
-library, so they're guaranteed correct for your install.
+SolidWorks API enum constants (like "blind" vs "through all" for an extrude)
+aren't hard-coded — they're pulled live from *your* installed SolidWorks 2022
+type library via `win32com.gencache`, so they're guaranteed correct for your
+install rather than a guess baked into this code.
 
-### Which install a server attaches to
+## Setup
 
-Each server resolves a **version-specific** ProgID — `SldWorks.Application.<major>`,
-where `major` maps to the release year as `year = 1992 + major` (19 → 2011,
-30 → 2022) — and dispatches only that.
+**Easiest way:** download the [latest release](https://github.com/blussyya/solidworks-mcp/releases/latest) and run `setup.bat`. It detects everything and configures opencode for you.
 
-The bare `SldWorks.Application` ProgID is deliberately never used. It belongs
-to whichever install registered it last, which is not necessarily the newest:
-on a machine with 2011 and 2022 side by side it was observed resolving to
-**2011**, so a server that believed it was driving 2022 silently drove 2011
-instead. Nothing errors when that happens — the interface names are identical,
-so you just get a different application quietly building your geometry. The
-same hazard applies to the type library, so each server loads the
-`sldworks.tlb` sitting next to the executable that actually answered rather
-than the one the registry's generic pointer names.
+Or manually:
 
-`sw_connect` and `sw_status` report the ProgID, executable path and release
-year of whatever they attached to, so you can confirm at a glance.
+1. **Python on Windows.** 3.10+, installed on the same Windows machine as
+   SolidWorks 2022 (not WSL — WSL can't reach Windows COM objects).
+2. Open a terminal in this folder and install dependencies:
+   ```
+   pip install -r requirements.txt
+   ```
+3. **Sanity-check the COM connection** before wiring it into opencode — open
+   SolidWorks 2022, then run:
+   ```
+   python -c "import win32com.client; app = win32com.client.gencache.EnsureDispatch('SldWorks.Application'); print(app.RevisionNumber)"
+   ```
+   If that prints a version number, you're good. If it errors with something
+   like "Class not registered", SolidWorks isn't installed/registered
+   properly on this machine — reinstalling or repairing the SolidWorks
+   installation fixes that.
+4. **Register it with opencode.** Copy `opencode_config.example.jsonc` into
+   your opencode configuration — either:
+   - **Project-level**: `opencode.jsonc` in your project root, or
+   - **Global**: `~/.config/opencode/opencode.jsonc`
 
-To force a specific install, set `SOLIDWORKS_MCP_PROGID` (e.g.
-`SldWorks.Application.30`) before launching the server.
+   Update the `command` and `cwd` paths to point at this folder on your
+   machine. The config uses `python` on PATH — if that doesn't work, use the
+   full path to your Python interpreter.
+5. Start opencode and ask it to connect to SolidWorks — it'll call `sw_connect`
+   and you should see the SolidWorks window come to the front (or launch).
 
-See the client-specific READMEs for the full tool list, example workflows,
-and known rough edges.
+## opencode config reference
+
+The key section to add to your `opencode.jsonc`:
+
+```jsonc
+{
+  "mcp": {
+    "solidworks": {
+      "type": "local",
+      "command": ["python", "C:\\path\\to\\solidworks-mcp\\opencode\\server.py"],
+      "cwd": "C:\\path\\to\\solidworks-mcp\\opencode",
+      "enabled": true
+    }
+  }
+}
+```
+
+## Example workflow
+
+"Make a 60x40x10mm plate with a 5mm hole in the middle and round the top
+edges" would roughly become:
+
+1. `sw_new_part`
+2. `sw_new_sketch` (Front Plane)
+3. `sw_sketch_rectangle` (centered, 60x40)
+4. `sw_sketch_add_dimension` on each side you want fixed (or drive it via
+   `sw_add_equation` later)
+5. `sw_sketch_exit` → returns e.g. `"Sketch1"`
+6. `sw_feature_extrude_boss` (sketch_name="Sketch1", depth_mm=10)
+7. `sw_new_sketch` on the top face, `sw_sketch_circle` (r=2.5), `sw_sketch_exit`
+8. `sw_feature_extrude_cut` (through_all=True)
+9. `sw_feature_fillet` (all_edges=True, radius_mm=1) — or pass specific
+   `edge_points_mm` if you only want certain edges
+10. `sw_export_file` to a `.step` or `.sldprt` path
+
+`sw_list_dimensions` / `sw_set_dimension` let you go back and change any
+value afterward — that's the point of doing this through the API rather than
+just exporting a fixed mesh from a converter script.
+
+## Known rough edges
+
+I built this from SolidWorks's official API docs and real published macro
+examples, cross-checked where I could, but **I don't have a live SolidWorks
+install to test against** — so treat the first real run as the actual test
+pass. In `tools/feature_tools.py` each tool is labeled by confidence:
+
+- **VERIFIED** (`sw_feature_extrude_boss`, `sw_feature_extrude_cut`) — the
+  exact positional call matches a real, working, published macro line for
+  line. Should just work.
+- **WELL-SOURCED** (`sw_feature_revolve`) — matches a real example closely.
+- **BEST-EFFORT** (`sw_feature_chamfer`, `sw_feature_shell`,
+  `sw_feature_linear_pattern`, `sw_feature_circular_pattern`) — built from
+  general API knowledge of the method shape, not a verified example. If one
+  of these throws or returns `None`, send me the exact error/traceback and
+  the SolidWorks API help link in that tool's docstring, and I'll fix the
+  call — these are usually one or two parameters out of order, not a
+  fundamentally wrong approach.
+
+Other things worth knowing:
+
+- **Units**: every tool takes millimeters (or degrees for angles) and
+  converts internally — the raw SolidWorks API always works in meters/radians
+  regardless of your document's display units.
+- **`sw_export_file`** uses the simplest `SaveAs` overload. If it errors on
+  your install, `IModelDocExtension.SaveAs3` is the modern replacement (needs
+  an `AdvancedSaveAsOptions` object) — the docstring links straight to the
+  2022 API help page.
+- **Edge/face selection** (fillet, chamfer, shell) works by passing an
+  approximate XYZ point near the edge/face rather than a name — SolidWorks
+  doesn't give edges friendly names the way it does planes. You'll generally
+  want `sw_screenshot` or your own visual inspection to get coordinates, or
+  use `all_edges=True` on fillet to just round everything.
+- **Single-instance COM**: this server assumes one SolidWorks session and
+  processes tool calls one at a time — that matches how you'd drive the UI
+  yourself, and avoids COM's threading headaches.
+
+## Extending it
+
+Tool modules live in `tools/`, one file per rough category (sketching,
+features, documents, parameters, inspection). Each exposes a `register(mcp)`
+function. `connection.py`'s `get_const(name)` is the way to pull any
+SolidWorks enum by name — add new tools there rather than hard-coding
+integers. The full API reference is at
+https://help.solidworks.com/2022/english/api/sldworksapi/welcome.htm.
