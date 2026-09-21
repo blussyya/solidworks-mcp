@@ -1,0 +1,16 @@
+__pycache__/
+*.pyc
+*.pyo
+*.bmp
+*.png
+*.env
+*.egg-info/
+dist/
+build/
+node_modules/
+
+# SolidWorks scratch
+swxJRNL.swj
+*.swj
+~$*
+*.SLDPRT.bak
