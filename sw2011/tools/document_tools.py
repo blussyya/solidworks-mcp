@@ -242,7 +242,20 @@ def register(mcp) -> None:
         model = conn.active_doc()
         title = model.GetTitle()
         if params.save:
-            model.Save3(0, 0, 0)
+            # Save3 (SW2013+), Save2 (SW2011-2012), Save
+            for method in ("Save3", "Save2", "Save"):
+                fn = getattr(model, method, None)
+                if fn:
+                    try:
+                        fn(0, 0, 0)
+                        break
+                    except TypeError:
+                        try:
+                            fn(0, 0)
+                            break
+                        except TypeError:
+                            fn()
+                            break
         conn.app.CloseDoc(title)
         return json.dumps({"closed": True, "title": title, "saved": params.save})
 
@@ -265,7 +278,21 @@ def register(mcp) -> None:
             str: JSON confirmation.
         """
         model = sw().active_doc()
-        ok = model.Save3(0, 0, 0)
+        # Save3 (SW2013+), Save2, Save
+        ok = None
+        for method in ("Save3", "Save2", "Save"):
+            fn = getattr(model, method, None)
+            if fn:
+                try:
+                    ok = fn(0, 0, 0)
+                    break
+                except TypeError:
+                    try:
+                        ok = fn(0, 0)
+                        break
+                    except TypeError:
+                        ok = fn()
+                        break
         result = ok[0] if isinstance(ok, tuple) else ok
         return json.dumps({"saved": bool(result), "path": model.GetPathName()})
 
@@ -308,7 +335,10 @@ def register(mcp) -> None:
         """
         model = sw().active_doc()
         os.makedirs(os.path.dirname(params.path) or ".", exist_ok=True)
-        result = _unwrap(model.Extension.SaveAs(params.path, 0, 0, None, 0, 0))
+        import pythoncom
+        from win32com.client import VARIANT
+        callout = VARIANT(pythoncom.VT_DISPATCH, None)
+        result = _unwrap(model.Extension.SaveAs(params.path, 0, 0, callout, 0, 0))
         ok = result[0]
         if not ok:
             raise RuntimeError(
@@ -414,7 +444,16 @@ def register(mcp) -> None:
         """
         model = sw().active_doc()
         if force:
-            model.ForceRebuild3(True)
+            # ForceRebuild3 (SW2014+), ForceRebuild2 (SW2011-2013), ForceRebuild
+            for method in ("ForceRebuild3", "ForceRebuild2", "ForceRebuild"):
+                fn = getattr(model, method, None)
+                if fn:
+                    try:
+                        fn(True)
+                        break
+                    except TypeError:
+                        fn()
+                        break
         else:
             model.EditRebuild3()
         return json.dumps({"rebuilt": True, "forced": force})

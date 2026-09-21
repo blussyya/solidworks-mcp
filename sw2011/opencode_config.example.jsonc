@@ -1,0 +1,11 @@
+{
+  "$schema": "https://opencode.ai/config.json",
+  "mcp": {
+    "solidworks2011": {
+      "type": "local",
+      "command": ["python", "C:\\path\\to\\solidworks-mcp\\sw2011\\server.py"],
+      "cwd": "C:\\path\\to\\solidworks-mcp\\sw2011",
+      "enabled": true
+    }
+  }
+}

@@ -8,3 +8,9 @@ __pycache__/
 dist/
 build/
 node_modules/
+
+# SolidWorks scratch
+swxJRNL.swj
+*.swj
+~$*
+*.SLDPRT.bak

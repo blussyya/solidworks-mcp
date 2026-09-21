@@ -1,0 +1,8 @@
+{
+  "mcpServers": {
+    "solidworks2011": {
+      "command": "C:\\path\\to\\python.exe",
+      "args": ["C:\\path\\to\\solidworks-mcp\\sw2011\\server.py"]
+    }
+  }
+}

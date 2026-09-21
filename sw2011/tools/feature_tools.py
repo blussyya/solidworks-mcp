@@ -14,9 +14,11 @@ import json
 import math
 from typing import List, Optional, Tuple
 
+import pythoncom
+import win32com.client
 from pydantic import BaseModel, ConfigDict, Field
 
-from connection import sw, get_const
+from connection import sw, get_const, _select_by_id2
 
 MM = 0.001
 DEG = math.pi / 180.0
@@ -24,7 +26,7 @@ DEG = math.pi / 180.0
 
 def _select_sketch(model, sketch_name: str) -> None:
     model.ClearSelection2(True)
-    ok = model.Extension.SelectByID2(sketch_name, "SKETCH", 0, 0, 0, False, 0, None, 0)
+    ok = _select_by_id2(model, sketch_name, "SKETCH", 0, 0, 0, False, 0)
     if not ok:
         raise RuntimeError(
             f"Could not select sketch '{sketch_name}'. Check the exact name in the "
@@ -34,9 +36,44 @@ def _select_sketch(model, sketch_name: str) -> None:
 
 def _select_point_entity(model, entity_type: str, point_mm: Tuple[float, float, float], append: bool) -> bool:
     x, y, z = point_mm
-    return bool(
-        model.Extension.SelectByID2("", entity_type, x * MM, y * MM, z * MM, append, 0, None, 0)
-    )
+    return _select_by_id2(model, "", entity_type, x * MM, y * MM, z * MM, append, 0)
+
+
+def _call_versioned(obj, methods_and_args):
+    """Try calling methods on obj in order (newest first). Each entry is
+    (method_name, args_tuple). Returns the first successful result.
+    Booleans in args are auto-converted to 0/1 for SW2011 COM compat.
+    Raises RuntimeError if all fail."""
+    for method_name, args in methods_and_args:
+        meth = getattr(obj, method_name, None)
+        if meth is None:
+            continue
+        safe_args = tuple(1 if a is True else (0 if a is False else a) for a in args)
+        try:
+            result = meth(*safe_args)
+            return result
+        except (TypeError, AttributeError):
+            continue
+    names = [m for m, _ in methods_and_args]
+    raise RuntimeError(f"None of these methods exist or worked: {', '.join(names)}")
+
+
+def _call_versioned(obj, methods_and_args):
+    """Try calling methods on obj in order (newest first). Each entry is
+    (method_name, args_tuple). Returns the first successful result.
+    Raises RuntimeError if all fail."""
+    for method_name, args in methods_and_args:
+        meth = getattr(obj, method_name, None)
+        if meth is None:
+            continue
+        try:
+            result = meth(*args)
+            return result
+        except (TypeError, AttributeError):
+            # Wrong number of args or method signature mismatch — try next
+            continue
+    names = [m for m, _ in methods_and_args]
+    raise RuntimeError(f"None of these methods exist or worked: {', '.join(names)}")
 
 
 def register(mcp) -> None:
@@ -76,30 +113,33 @@ def register(mcp) -> None:
         model = sw().active_doc()
         _select_sketch(model, params.sketch_name)
         has_draft = params.draft_angle_deg != 0
-        feat = model.FeatureManager.FeatureExtrusion3(
-            not params.both_directions,      # Sd: True = single direction
-            False,                            # Flip
-            params.reverse,                   # Dir
-            get_const("swEndCondBlind"),      # T1
-            get_const("swEndCondBlind"),      # T2
-            params.depth_mm * MM,              # D1
-            params.depth2_mm * MM,             # D2
-            has_draft, False,                  # Dchk1, Dchk2
-            False, False,                      # Ddir1, Ddir2
-            params.draft_angle_deg * DEG, 0,   # Dang1, Dang2
-            False, False,                      # OffsetReverse1, OffsetReverse2
-            False, False,                      # TranslateSurface1, TranslateSurface2
-            params.merge,                      # Merge
-            True, True,                        # UseFeatScope, UseAutoSelect
-            get_const("swStartSketchPlane"),   # T0
-            0,                                  # StartOffset
-            False,                              # FlipStartOffset
-        )
+        fm = model.FeatureManager
+        # FeatureExtrusion3 (SW2013+), FeatureExtrusion2 (SW2011-2012)
+        feat = _call_versioned(fm, [
+            ("FeatureExtrusion3", (
+                not params.both_directions, False, params.reverse,
+                get_const("swEndCondBlind"), get_const("swEndCondBlind"),
+                params.depth_mm * MM, params.depth2_mm * MM,
+                has_draft, False, False, False,
+                params.draft_angle_deg * DEG, 0,
+                False, False, False, False,
+                params.merge, True, True,
+                get_const("swStartSketchPlane"), 0, False,
+            )),
+            ("FeatureExtrusion2", (
+                not params.both_directions, False, params.reverse,
+                get_const("swEndCondBlind"), get_const("swEndCondBlind"),
+                params.depth_mm * MM, params.depth2_mm * MM,
+                has_draft, False, False, False,
+                params.draft_angle_deg * DEG, 0,
+                False, False, False, False,
+                params.merge, True, True,
+            )),
+        ])
         if feat is None:
             raise RuntimeError(
-                "FeatureExtrusion3 returned None — the extrude failed. Common causes: "
-                "the sketch isn't closed/valid for a solid extrude, or it's already "
-                "used by another feature."
+                "Extrude failed. Common causes: the sketch isn't closed/valid "
+                "for a solid extrude, or it's already used by another feature."
             )
         return json.dumps({"created": "extrude_boss", "feature_name": feat.Name})
 
@@ -136,28 +176,32 @@ def register(mcp) -> None:
         model = sw().active_doc()
         _select_sketch(model, params.sketch_name)
         end_cond = get_const("swEndCondThroughAll") if params.through_all else get_const("swEndCondBlind")
-        feat = model.FeatureManager.FeatureCut4(
-            not params.both_directions,          # Sd
-            params.reverse,                       # Flip
-            False,                                  # Dir
-            end_cond, 0,                            # T1, T2
-            params.depth_mm * MM, params.depth_mm * MM,  # D1, D2
-            False, False, False, False,             # Dchk1, Dchk2, Ddir1, Ddir2
-            0, 0,                                    # Dang1, Dang2
-            False, False,                            # OffsetReverse1, OffsetReverse2
-            False, False,                            # TranslateSurface1, TranslateSurface2
-            False,                                    # NormalCut
-            True, True,                               # UseFeatScope, UseAutoSelect
-            True, True,                               # AssemblyFeatureScope, AutoSelectComponents
-            False,                                     # PropagateFeatureToParts
-            get_const("swStartSketchPlane"),           # T0
-            0, False,                                   # StartOffset, FlipStartOffset
-            False,                                       # (trailing param — see FeatureCut4 docs if this errors)
-        )
+        fm = model.FeatureManager
+        # FeatureCut4 (SW2016+), FeatureCut3 (SW2011-2015)
+        feat = _call_versioned(fm, [
+            ("FeatureCut4", (
+                not params.both_directions, params.reverse, False,
+                end_cond, 0,
+                params.depth_mm * MM, params.depth_mm * MM,
+                False, False, False, False, 0, 0,
+                False, False, False, False, False,
+                True, True, True, True, False,
+                get_const("swStartSketchPlane"), 0, False, False,
+            )),
+            ("FeatureCut3", (
+                not params.both_directions, params.reverse, False,
+                end_cond, 0,
+                params.depth_mm * MM, params.depth_mm * MM,
+                False, False, False, False, 0, 0,
+                False, False, False, False, False,
+                True, True, True, True, False,
+                get_const("swStartSketchPlane"), 0, False,
+            )),
+        ])
         if feat is None:
             raise RuntimeError(
-                "FeatureCut4 returned None — the cut failed. Common causes: the sketch "
-                "doesn't intersect any material, or isn't closed."
+                "Cut extrude failed. Common causes: the sketch doesn't intersect "
+                "any material, or isn't closed."
             )
         return json.dumps({"created": "extrude_cut", "feature_name": feat.Name})
 
@@ -193,20 +237,27 @@ def register(mcp) -> None:
         """
         model = sw().active_doc()
         _select_sketch(model, params.sketch_name)
-        feat = model.FeatureManager.FeatureRevolve2(
-            True, not params.cut, False, params.cut, params.reverse, False,
-            get_const("swEndCondBlind"), get_const("swEndCondBlind"),
-            params.angle_deg * DEG, 0,
-            False, False,
-            0, 0,
-            0,
-            0, 0,
-            True, False, True,
-        )
+        fm = model.FeatureManager
+        # FeatureRevolve2 (SW2013+), FeatureRevolve (SW2011-2012)
+        feat = _call_versioned(fm, [
+            ("FeatureRevolve2", (
+                True, not params.cut, False, params.cut, params.reverse, False,
+                get_const("swEndCondBlind"), get_const("swEndCondBlind"),
+                params.angle_deg * DEG, 0,
+                False, False, 0, 0, 0, 0, 0,
+                True, False, True,
+            )),
+            ("FeatureRevolve", (
+                True, not params.cut, False, params.cut, params.reverse,
+                get_const("swEndCondBlind"), get_const("swEndCondBlind"),
+                params.angle_deg * DEG, 0,
+                False, False, 0, 0, 0,
+            )),
+        ])
         if feat is None:
             raise RuntimeError(
-                "FeatureRevolve2 returned None — the revolve failed. Make sure the "
-                "sketch has exactly one construction-line axis and a closed profile."
+                "Revolve failed. Make sure the sketch has exactly one "
+                "construction-line axis and a closed profile."
             )
         return json.dumps({"created": "revolve", "feature_name": feat.Name})
 
@@ -262,22 +313,19 @@ def register(mcp) -> None:
         if count == 0:
             raise RuntimeError("No edges were selected — nothing to fillet.")
 
-        feat = model.FeatureManager.FeatureFillet3(
-            0,                       # Options bitmask (swFilletOptions_e), 0 = defaults
-            params.radius_mm * MM,   # R1: default radius
-            params.radius_mm * MM,   # R2: second radius (same for constant radius)
-            0,                       # Rho: conic rho (unused for constant radius)
-            0,                       # Ftyp: 0 = constant radius fillet
-            0,                       # OverflowType
-            0,                       # ConicRhoType
-            None,                    # Radii (array of per-edge radii, None = use default)
-            None,                    # Dist2Arr
-            None,                    # RhoArr
-            None,                    # SetBackDistances
-            None,                    # PointRadiusArray
-            None,                    # PointDist2Array
-            None,                    # PointRhoArray
-        )
+        empty = win32com.client.VARIANT(pythoncom.VT_EMPTY, None)
+        fm = model.FeatureManager
+        # FeatureFillet3 (SW2014+), FeatureFillet2 (SW2011-2013)
+        feat = _call_versioned(fm, [
+            ("FeatureFillet3", (
+                195, params.radius_mm * MM, 0, 0, 0, 0, 0,
+                empty, empty, empty, empty, empty, empty, empty,
+            )),
+            ("FeatureFillet2", (
+                195, params.radius_mm * MM, 0, 0, 0, 0,
+                empty, empty, empty, empty, empty,
+            )),
+        ])
         if feat is None:
             raise RuntimeError("FeatureFillet3 returned None — the fillet failed (radius too large for the geometry?).")
         return json.dumps({"created": "fillet", "feature_name": feat.Name, "edges_selected": count})
@@ -382,10 +430,11 @@ def register(mcp) -> None:
         if count == 0:
             raise RuntimeError("No faces were selected — nothing to remove.")
 
-        feat = model.FeatureManager.InsertFeatureShell(params.thickness_mm * MM, False)
-        if feat is None:
-            raise RuntimeError("InsertFeatureShell returned None — see the tool description for how to fix this.")
-        return json.dumps({"created": "shell", "feature_name": feat.Name, "faces_removed": count})
+        ret = model.InsertFeatureShell(params.thickness_mm * MM, False)
+        if ret not in (0, None):
+            raise RuntimeError(f"InsertFeatureShell failed with code {ret!r}.")
+        model.EditRebuild3()
+        return json.dumps({"created": "shell", "feature_name": "Shell1", "faces_removed": count})
 
     # -- Patterns (BEST-EFFORT) --
 
@@ -432,14 +481,20 @@ def register(mcp) -> None:
         if not _select_point_entity(model, "EDGE", params.direction_point_mm, append=True):
             raise RuntimeError("Could not select a direction edge near direction_point_mm.")
 
-        feat = model.FeatureManager.FeatureLinearPattern4(
-            params.count, params.spacing_mm * MM, 1, 0,
-            params.reverse, False,
-            True, False,
-            "", "",
-            False, False,
-            True, True,
-        )
+        fm = model.FeatureManager
+        # FeatureLinearPattern4 (SW2016+), FeatureLinearPattern2 (SW2011-2015)
+        feat = _call_versioned(fm, [
+            ("FeatureLinearPattern4", (
+                params.count, params.spacing_mm * MM, 1, 0,
+                params.reverse, False, True, False, "", "",
+                False, False, True, True,
+            )),
+            ("FeatureLinearPattern2", (
+                params.count, params.spacing_mm * MM, 1, 0,
+                params.reverse, False, True, False, "", "",
+                False, False,
+            )),
+        ])
         if feat is None:
             raise RuntimeError("FeatureLinearPattern4 returned None — see the tool description for how to fix this.")
         return json.dumps({"created": "linear_pattern", "feature_name": feat.Name})
@@ -487,10 +542,18 @@ def register(mcp) -> None:
             raise RuntimeError(f"No feature named '{params.feature_name}' found.")
         feat_to_pattern.Select2(True, 0)
 
-        feat = model.FeatureManager.FeatureCircularPattern5(
-            params.count, params.angle_deg * DEG, params.equal_spacing,
-            "", False, False, True, True, False,
-        )
+        fm = model.FeatureManager
+        # FeatureCircularPattern5 (SW2018+), FeatureCircularPattern2 (SW2011-2017)
+        feat = _call_versioned(fm, [
+            ("FeatureCircularPattern5", (
+                params.count, params.angle_deg * DEG, params.equal_spacing,
+                "", False, False, True, True, False,
+            )),
+            ("FeatureCircularPattern2", (
+                params.count, params.angle_deg * DEG, params.equal_spacing,
+                "", False, False, True, True,
+            )),
+        ])
         if feat is None:
             raise RuntimeError("FeatureCircularPattern5 returned None — see the tool description for how to fix this.")
         return json.dumps({"created": "circular_pattern", "feature_name": feat.Name})
@@ -552,9 +615,9 @@ def register(mcp) -> None:
         """
         model = sw().active_doc()
         model.ClearSelection2(True)
-        ok = model.Extension.SelectByID2(feature_name, "BODYFEATURE", 0, 0, 0, False, 0, None, 0)
+        ok = _select_by_id2(model, feature_name, "BODYFEATURE", 0, 0, 0, False, 0)
         if not ok:
-            ok = model.Extension.SelectByID2(feature_name, "SKETCH", 0, 0, 0, False, 0, None, 0)
+            ok = _select_by_id2(model, feature_name, "SKETCH", 0, 0, 0, False, 0)
         if not ok:
             raise RuntimeError(f"Could not select '{feature_name}' to delete. Check sw_list_features for the exact name.")
         model.EditDelete()

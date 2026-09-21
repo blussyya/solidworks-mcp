@@ -242,20 +242,7 @@ def register(mcp) -> None:
         model = conn.active_doc()
         title = model.GetTitle()
         if params.save:
-            # Save3 (SW2013+), Save2 (SW2011-2012), Save
-            for method in ("Save3", "Save2", "Save"):
-                fn = getattr(model, method, None)
-                if fn:
-                    try:
-                        fn(0, 0, 0)
-                        break
-                    except TypeError:
-                        try:
-                            fn(0, 0)
-                            break
-                        except TypeError:
-                            fn()
-                            break
+            model.Save3(0, 0, 0)
         conn.app.CloseDoc(title)
         return json.dumps({"closed": True, "title": title, "saved": params.save})
 
@@ -278,21 +265,7 @@ def register(mcp) -> None:
             str: JSON confirmation.
         """
         model = sw().active_doc()
-        # Save3 (SW2013+), Save2, Save
-        ok = None
-        for method in ("Save3", "Save2", "Save"):
-            fn = getattr(model, method, None)
-            if fn:
-                try:
-                    ok = fn(0, 0, 0)
-                    break
-                except TypeError:
-                    try:
-                        ok = fn(0, 0)
-                        break
-                    except TypeError:
-                        ok = fn()
-                        break
+        ok = model.Save3(0, 0, 0)
         result = ok[0] if isinstance(ok, tuple) else ok
         return json.dumps({"saved": bool(result), "path": model.GetPathName()})
 
@@ -441,16 +414,7 @@ def register(mcp) -> None:
         """
         model = sw().active_doc()
         if force:
-            # ForceRebuild3 (SW2014+), ForceRebuild2 (SW2011-2013), ForceRebuild
-            for method in ("ForceRebuild3", "ForceRebuild2", "ForceRebuild"):
-                fn = getattr(model, method, None)
-                if fn:
-                    try:
-                        fn(True)
-                        break
-                    except TypeError:
-                        fn()
-                        break
+            model.ForceRebuild3(True)
         else:
             model.EditRebuild3()
         return json.dumps({"rebuilt": True, "forced": force})

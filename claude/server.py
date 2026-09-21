@@ -1,9 +1,13 @@
 #!/usr/bin/env python3
 """
-solidworks_mcp — an MCP server exposing SolidWorks 2022 modeling automation
+solidworks_mcp — an MCP server exposing SolidWorks modeling automation
 (sketching, features, dimensions, export, inspection) as tools Claude can call.
 
-This must run on the Windows machine where SolidWorks 2022 is installed —
+This server drives the modern SolidWorks line (2012 and newer, newest install
+wins). SolidWorks 2011 has its own server in this repo under sw2011/, so that
+neither has to guess which install it attached to.
+
+This must run on the Windows machine where SolidWorks is installed —
 SolidWorks automation only works over COM, which is Windows-only. See
 README.md for setup and for how to point Claude Desktop at this server.
 """
