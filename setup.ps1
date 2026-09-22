@@ -1,256 +1,240 @@
-# SolidWorks MCP — Auto Setup Script
-# Detects Python & SolidWorks, installs deps, and configures MCP clients.
-# Run: powershell -ExecutionPolicy Bypass -File setup.ps1
-
+# SolidWorks MCP installer (Windows PowerShell 5.1+)
+# Detects installed Python, SolidWorks and MCP clients. Backs up existing configs.
+param(
+    [ValidateSet("Auto","Modern","2011","Both")][string]$Server = "Auto",
+    [string[]]$Clients = @(),
+    [switch]$AllClients
+)
 $ErrorActionPreference = "Stop"
-$RepoRoot = Split-Path -Parent $MyInvocation.MyCommand.Path
-
-Write-Host ""
-Write-Host "=== SolidWorks MCP Setup ===" -ForegroundColor Cyan
-Write-Host ""
-
-# --- Detect Python ---
-Write-Host "[1/4] Detecting Python..." -ForegroundColor Yellow
-
-$Python = $null
-foreach ($p in @(
-    "$env:LOCALAPPDATA\Programs\Python\Python313\python.exe",
-    "$env:LOCALAPPDATA\Programs\Python\Python312\python.exe",
-    "$env:LOCALAPPDATA\Programs\Python\Python311\python.exe",
-    "$env:LOCALAPPDATA\Programs\Python\Python310\python.exe",
-    "C:\Python313\python.exe", "C:\Python312\python.exe",
-    "C:\Python311\python.exe", "C:\Python310\python.exe"
-)) {
-    if (Test-Path $p) { $Python = $p; break }
+$Root = Split-Path -Parent $MyInvocation.MyCommand.Path
+$SupportedClients = @("claude-desktop","claude-code","codex","cursor","opencode","windsurf","gemini","vscode")
+function Note($message) { Write-Host "[+] $message" -ForegroundColor Cyan }
+function Warn($message) { Write-Warning $message }
+function Fail($message) { throw $message }
+function ExistingCommand($name) {
+    $c = Get-Command $name -ErrorAction SilentlyContinue
+    if ($c) { return $c.Source }
+    return $null
 }
-if (-not $Python) { $Python = (Get-Command python -ErrorAction SilentlyContinue).Source }
-if (-not $Python) {
-    Write-Host "  ERROR: Python not found. Install Python 3.10+ from https://python.org" -ForegroundColor Red
-    exit 1
-}
-$pyVersion = & $Python --version 2>$null | Out-String
-Write-Host "  Found: $Python ($($pyVersion.Trim()))" -ForegroundColor Green
-
-# --- Detect SolidWorks ---
-# Enumerate every version-specific ProgID (SldWorks.Application.<major>) and
-# resolve each to the .exe it actually launches. This matters on machines with
-# more than one SolidWorks installed: the bare "SldWorks.Application" ProgID
-# belongs to whichever install registered it last, which is not necessarily
-# the newest, so it is never used to decide anything here.
-Write-Host "[2/4] Detecting SolidWorks..." -ForegroundColor Yellow
-
-function Get-SolidWorksInstalls {
-    $found = @()
-    foreach ($major in 19..60) {
-        $progid = "SldWorks.Application.$major"
-        $clsid = (Get-ItemProperty "Registry::HKEY_CLASSES_ROOT\$progid\CLSID" -ErrorAction SilentlyContinue)."(default)"
-        if (-not $clsid) { continue }
-        $exe = (Get-ItemProperty "Registry::HKEY_CLASSES_ROOT\CLSID\$clsid\LocalServer32" -ErrorAction SilentlyContinue)."(default)"
-        if ($exe) { $exe = $exe.Trim('"') }
-        $found += [pscustomobject]@{
-            Major  = $major
-            Year   = 1992 + $major
-            ProgId = $progid
-            Exe    = $exe
-        }
-    }
-    return $found | Sort-Object Major -Descending
-}
-
-$SWInstalls = Get-SolidWorksInstalls
-$SWModern = $SWInstalls | Where-Object { $_.Major -ge 20 } | Select-Object -First 1
-$SW2011 = $SWInstalls | Where-Object { $_.Major -eq 19 } | Select-Object -First 1
-
-if ($SWInstalls.Count -gt 0) {
-    foreach ($i in $SWInstalls) {
-        $tag = if ($i.Major -ge 20) { "-> modern server" } else { "-> sw2011 server" }
-        Write-Host ("  Found: SolidWorks {0}  [{1}]  {2}" -f $i.Year, $i.ProgId, $tag) -ForegroundColor Green
-        if ($i.Exe) { Write-Host "         $($i.Exe)" -ForegroundColor DarkGray }
-    }
-    if ($SWInstalls.Count -gt 1) {
-        Write-Host "  Multiple versions installed - each server pins its own, so they won't collide." -ForegroundColor DarkGray
-    }
-} else {
-    Write-Host "  WARNING: no SolidWorks ProgID registered; could not auto-detect" -ForegroundColor DarkYellow
-}
-$SWPath = if ($SWModern -and $SWModern.Exe) { Split-Path -Parent $SWModern.Exe } else { $null }
-
-# --- Install dependencies ---
-Write-Host "[3/4] Installing Python dependencies..." -ForegroundColor Yellow
-
-$requirements = Join-Path $RepoRoot "requirements.txt"
-if (-not (Test-Path $requirements)) {
-    Write-Host "  ERROR: requirements.txt not found in $RepoRoot" -ForegroundColor Red
-    exit 1
-}
-$null = cmd /c "`"$Python`" -m pip install -r `"$requirements`" --quiet 2>nul"
-Write-Host "  Dependencies installed." -ForegroundColor Green
-
-# --- Configure clients ---
-Write-Host "[4/4] Configuring MCP clients..." -ForegroundColor Yellow
-Write-Host ""
-Write-Host "  Which server do you want to configure?" -ForegroundColor Cyan
-Write-Host "    Modern SolidWorks (2012+), registered as 'solidworks':"
-Write-Host "      1) Claude Desktop"
-Write-Host "      2) opencode"
-Write-Host "      3) Both"
-Write-Host "      7) Codex"
-Write-Host "      8) All three clients"
-Write-Host "    SolidWorks 2011, registered separately as 'solidworks2011':"
-Write-Host "      4) Claude Desktop"
-Write-Host "      5) opencode"
-Write-Host "      6) Both"
-Write-Host "      9) Codex"
-Write-Host "     10) All three clients"
-Write-Host ""
-Write-Host "  The two are separate servers with separate tool calls, so you can" -ForegroundColor DarkGray
-Write-Host "  configure both and pick a version per conversation." -ForegroundColor DarkGray
-Write-Host ""
-$choice = Read-Host "  Enter choice (1/2/3/4/5/6/7/8/9/10)"
-
-# Which server directory and registered name this choice implies.
-if ($choice -in @("4", "5", "6", "9", "10")) {
-    $ServerDir = "sw2011"
-    $ServerName = "solidworks2011"
-    $ServerLabel = "SolidWorks 2011"
-    if (-not $SW2011) {
-        Write-Host "  WARNING: no SolidWorks 2011 install detected - configuring anyway." -ForegroundColor DarkYellow
-    }
-} else {
-    $ServerDir = $null   # resolved per client below (claude/ or opencode/)
-    $ServerName = "solidworks"
-    $ServerLabel = "modern SolidWorks (2012+)"
-    if (-not $SWModern) {
-        Write-Host "  WARNING: no SolidWorks 2012+ install detected - configuring anyway." -ForegroundColor DarkYellow
-    }
-}
-$wantClaude = $choice -in @("1", "3", "4", "6", "8", "10")
-$wantOpencode = $choice -in @("2", "3", "5", "6", "8", "10")
-$wantCodex = $choice -in @("7", "8", "9", "10")
-
-# --- Claude Desktop ---
-if ($wantClaude) {
-    $dir = if ($ServerDir) { $ServerDir } else { "claude" }
-    $serverPy = Join-Path $RepoRoot "$dir\server.py"
-    $claudeDir = "$env:APPDATA\Claude"
-    $claudeConfig = "$claudeDir\claude_desktop_config.json"
-
-    if (-not (Test-Path $claudeDir)) {
-        New-Item -ItemType Directory -Path $claudeDir -Force | Out-Null
-    }
-
-    $serverEntry = @{
-        command = $Python
-        args = @($serverPy)
-    }
-    $entry = @{ mcpServers = @{ $ServerName = $serverEntry } }
-
-    if (Test-Path $claudeConfig) {
-        try {
-            $existing = Get-Content $claudeConfig -Raw | ConvertFrom-Json
-            if (-not $existing.mcpServers) {
-                $existing | Add-Member "mcpServers" @{} -Force
+function Resolve-Python {
+    $candidates = New-Object System.Collections.ArrayList
+    $venv = Join-Path $Root ".venv\Scripts\python.exe"
+    # Only use a previous venv if it is valid; don't create a venv inside itself.
+    if (Test-Path $venv) { [void]$candidates.Add($venv) }
+    $py = ExistingCommand "py.exe"
+    if ($py) {
+        $listing = & $py -0p 2>$null
+        foreach ($line in $listing) {
+            if ($line -match '([A-Za-z]:\\[^\r\n]*?python(?:\.exe)?)\s*$') {
+                [void]$candidates.Add($Matches[1])
             }
-            $existing.mcpServers | Add-Member $ServerName $serverEntry -Force
-            $existing | ConvertTo-Json -Depth 10 | Set-Content $claudeConfig -Encoding UTF8
-        } catch {
-            $entry | ConvertTo-Json -Depth 10 | Set-Content $claudeConfig -Encoding UTF8
         }
-        Write-Host "  Claude Desktop: '$ServerName' config updated ($ServerLabel)." -ForegroundColor Green
-    } else {
-        $entry | ConvertTo-Json -Depth 10 | Set-Content $claudeConfig -Encoding UTF8
-        Write-Host "  Claude Desktop: '$ServerName' config created ($ServerLabel)." -ForegroundColor Green
     }
-    Write-Host "    Restart Claude Desktop to use the MCP server." -ForegroundColor DarkGray
-}
-
-# --- opencode ---
-if ($wantOpencode) {
-    $dir = if ($ServerDir) { $ServerDir } else { "opencode" }
-    $serverPy = Join-Path $RepoRoot "$dir\server.py"
-    $serverCwd = Join-Path $RepoRoot $dir
-    $ocDir = "$env:USERPROFILE\.config\opencode"
-    $ocConfig = "$ocDir\opencode.jsonc"
-
-    if (-not (Test-Path $ocDir)) {
-        New-Item -ItemType Directory -Path $ocDir -Force | Out-Null
+    foreach ($name in @("python.exe","python3.exe")) {
+        $path = ExistingCommand $name
+        if ($path) { [void]$candidates.Add($path) }
     }
-
-    $pyEsc = $Python.Replace('\', '\\')
-    $svEsc = $serverPy.Replace('\', '\\')
-    $cwEsc = $serverCwd.Replace('\', '\\')
-
-    $ocContent = @"
-{
-  "`$schema": "https://opencode.ai/config.json",
-  "mcp": {
-    "$ServerName": {
-      "type": "local",
-      "command": [
-        "$pyEsc",
-        "$svEsc"
-      ],
-      "cwd": "$cwEsc",
-      "enabled": true
-    }
-  }
-}
-"@
-
-    if (Test-Path $ocConfig) {
-        $raw = Get-Content $ocConfig -Raw
-        # Exact key match, so "solidworks" does not match "solidworks2011"
-        # and the two servers can coexist in one config.
-        if ($raw -match ('"' + [regex]::Escape($ServerName) + '"\s*:')) {
-            Write-Host "  opencode: '$ServerName' already configured, skipping." -ForegroundColor DarkYellow
-        } else {
-            $backup = "$ocConfig.bak.$(Get-Date -Format 'yyyyMMddHHmmss')"
-            Copy-Item $ocConfig $backup
-            $raw = $raw -replace '("mcp"\s*:\s*\{)', "`$1`n    `"$ServerName`": {`n      `"type`": `"local`",`n      `"command`": [`"$pyEsc`",`"$svEsc`"],`n      `"cwd`": `"$cwEsc`",`n      `"enabled`": true`n    },"
-            $raw | Set-Content $ocConfig -Encoding UTF8
-            Write-Host "  opencode: '$ServerName' added to existing config (backup: $backup)." -ForegroundColor Green
+    $bases = @("$env:LOCALAPPDATA\Programs\Python","C:\","$env:ProgramFiles\Python")
+    foreach ($base in $bases) {
+        if (-not (Test-Path $base)) { continue }
+        foreach ($dir in @(Get-ChildItem $base -Directory -ErrorAction SilentlyContinue | Where-Object { $_.Name -match '^Python3\d+' })) {
+            $exe = Join-Path $dir.FullName "python.exe"
+            if (Test-Path $exe) { [void]$candidates.Add($exe) }
         }
-    } else {
-        $ocContent | Set-Content $ocConfig -Encoding UTF8
-        Write-Host "  opencode: '$ServerName' config created ($ServerLabel)." -ForegroundColor Green
     }
-    Write-Host "    Restart opencode to use the MCP server." -ForegroundColor DarkGray
-}
-
-# --- Codex ---
-if ($wantCodex) {
-    $dir = if ($ServerDir) { $ServerDir } else { "claude" }
-    $serverPy = Join-Path $RepoRoot "$dir\server.py"
-    $codex = (Get-Command codex -ErrorAction SilentlyContinue).Source
-    if (-not $codex) {
-        Write-Host "  ERROR: Codex CLI not found. Install or open the Codex desktop app first." -ForegroundColor Red
-        exit 1
+    $found = @()
+    foreach ($candidate in ($candidates | Select-Object -Unique)) {
+        try {
+            $result = & $candidate -c "import sys; print('%s.%s.%s|%s|%s' % (*sys.version_info[:3], sys.executable, sys.platform))" 2>$null
+            if ($LASTEXITCODE -ne 0 -or -not $result) { continue }
+            $parts = $result.Trim().Split("|")
+            if ($parts[2] -ne "win32") { continue }
+            $version = [version]$parts[0]
+            if ($version -lt [version]"3.10") {
+                Warn "Python $version at $($parts[1]) is too old. Python 3.10+ is required."
+                continue
+            }
+            $found += [pscustomobject]@{ Version=$version; Path=$parts[1] }
+        } catch { Warn "Could not run Python candidate $candidate" }
     }
-
-    # Some restricted shells omit these even though USERPROFILE is present.
-    if (-not $env:HOME) { $env:HOME = $env:USERPROFILE }
-    if (-not $env:HOMEDRIVE) { $env:HOMEDRIVE = Split-Path -Qualifier $env:USERPROFILE }
-    if (-not $env:HOMEPATH) { $env:HOMEPATH = $env:USERPROFILE.Substring($env:HOMEDRIVE.Length) }
-    if (-not $env:CODEX_HOME) { $env:CODEX_HOME = Join-Path $env:USERPROFILE ".codex" }
-
-    & $codex mcp remove $ServerName 2>$null | Out-Null
-    & $codex mcp add $ServerName -- $Python $serverPy
-    if ($LASTEXITCODE -ne 0) {
-        Write-Host "  ERROR: Codex could not register '$ServerName'." -ForegroundColor Red
-        exit $LASTEXITCODE
+    if (-not $found) { Fail "No compatible Python found. Install Python 3.10+ from https://www.python.org/downloads/windows/ and rerun setup.bat." }
+    $best = $found | Sort-Object Version -Descending | Select-Object -First 1
+    Note "Python $($best.Version): $($best.Path)"
+    return $best.Path
+}
+function Get-SolidWorks {
+    $installs = @()
+    foreach ($major in 19..60) {
+        $id = "SldWorks.Application.$major"
+        $key = "Registry::HKEY_CLASSES_ROOT\$id\CLSID"
+        $clsid = (Get-ItemProperty $key -ErrorAction SilentlyContinue)."(default)"
+        if ($clsid) {
+            $installs += [pscustomobject]@{ Major=$major; Year=(1992+$major); ProgId=$id }
+        }
     }
-    Write-Host "  Codex: '$ServerName' config updated ($ServerLabel)." -ForegroundColor Green
-    Write-Host "    Restart the Codex desktop app to use the MCP server." -ForegroundColor DarkGray
+    return @($installs)
 }
-
-Write-Host ""
-Write-Host "=== Setup complete! ===" -ForegroundColor Green
-if ($serverPy) {
-    Write-Host "  Registered as: $ServerName  ($ServerLabel)"
-    Write-Host "  Server: $serverPy"
-} else {
-    Write-Host "  No client configured (unrecognized choice '$choice')." -ForegroundColor DarkYellow
+function Backup-Config($path) {
+    if (Test-Path $path) {
+        $backup = "$path.bak.$(Get-Date -Format 'yyyyMMddHHmmssfff')"
+        Copy-Item -LiteralPath $path -Destination $backup -ErrorAction Stop
+        Note "Backed up $path"
+    }
 }
-Write-Host "  Python: $Python"
-if ($SWPath) { Write-Host "  SolidWorks: $SWPath" }
-Write-Host ""
+function Set-JsonConfig($path,$section,$name,$entry) {
+    $dir = Split-Path -Parent $path
+    if (-not (Test-Path $dir)) { New-Item $dir -ItemType Directory -Force | Out-Null }
+    $config = [pscustomobject]@{}
+    if (Test-Path $path) {
+        $raw = Get-Content -LiteralPath $path -Raw
+        if ($raw.Trim()) {
+            try { $config = $raw | ConvertFrom-Json -ErrorAction Stop }
+            catch {
+                Warn "Skipped $path: cannot safely parse existing JSON/JSONC. Existing settings were not changed. Remove comments manually or configure this client yourself."
+                return $false
+            }
+        }
+    }
+    if (-not ($config.PSObject.Properties.Name -contains $section)) {
+        $config | Add-Member -NotePropertyName $section -NotePropertyValue ([pscustomobject]@{})
+    }
+    if ($null -eq $config.$section) { $config.$section = [pscustomobject]@{} }
+    $config.$section | Add-Member -NotePropertyName $name -NotePropertyValue $entry -Force
+    $json = $config | ConvertTo-Json -Depth 50
+    # Serialize before backup/write; preserve original if any step fails.
+    Backup-Config $path
+    $temp = "$path.tmp.$([guid]::NewGuid().ToString('N'))"
+    try {
+        [System.IO.File]::WriteAllText($temp,$json,(New-Object System.Text.UTF8Encoding($false)))
+        Move-Item -LiteralPath $temp -Destination $path -Force
+    } finally { if (Test-Path $temp) { Remove-Item $temp -Force } }
+    Note "Configured $name in $path"
+    return $true
+}
+function Detect-Clients {
+    $found = @()
+    if ((Test-Path "$env:APPDATA\Claude") -or (ExistingCommand "claude")) {
+        if (Test-Path "$env:APPDATA\Claude") { $found += "claude-desktop" }
+    }
+    if (ExistingCommand "claude") { $found += "claude-code" }
+    if ((ExistingCommand "codex") -or (Test-Path "$env:USERPROFILE\.codex") -or (Test-Path "$env:LOCALAPPDATA\Programs\Codex") -or (Test-Path "$env:LOCALAPPDATA\Packages\OpenAI.Codex_2p2nqsd0c76g0")) { $found += "codex" }
+    if ((ExistingCommand "cursor") -or (Test-Path "$env:APPDATA\Cursor") -or (Test-Path "$env:USERPROFILE\.cursor")) { $found += "cursor" }
+    if ((ExistingCommand "opencode") -or (Test-Path "$env:USERPROFILE\.config\opencode")) { $found += "opencode" }
+    if ((Test-Path "$env:USERPROFILE\.codeium\windsurf") -or (Test-Path "$env:APPDATA\Windsurf")) { $found += "windsurf" }
+    if ((ExistingCommand "gemini") -or (Test-Path "$env:USERPROFILE\.gemini")) { $found += "gemini" }
+    if ((ExistingCommand "code") -or (Test-Path "$env:APPDATA\Code\User")) { $found += "vscode" }
+    return @($found | Select-Object -Unique)
+}
+function Register-Client($client,$name,$python,$serverPath) {
+    $args = @($serverPath)
+    $entry = [pscustomobject]@{ command=$python; args=$args }
+    switch ($client) {
+        "claude-desktop" {
+            return Set-JsonConfig "$env:APPDATA\Claude\claude_desktop_config.json" "mcpServers" $name $entry
+        }
+        "cursor" {
+            return Set-JsonConfig "$env:USERPROFILE\.cursor\mcp.json" "mcpServers" $name $entry
+        }
+        "windsurf" {
+            return Set-JsonConfig "$env:USERPROFILE\.codeium\windsurf\mcp_config.json" "mcpServers" $name $entry
+        }
+        "gemini" {
+            return Set-JsonConfig "$env:USERPROFILE\.gemini\settings.json" "mcpServers" $name $entry
+        }
+        "vscode" {
+            $vscodeEntry = [pscustomobject]@{ type="stdio"; command=$python; args=$args }
+            return Set-JsonConfig "$env:APPDATA\Code\User\mcp.json" "servers" $name $vscodeEntry
+        }
+        "opencode" {
+            $ocdir = "$env:USERPROFILE\.config\opencode"
+            $ocfile = Join-Path $ocdir "opencode.json"
+            $jsonc = Join-Path $ocdir "opencode.jsonc"
+            if ((Test-Path $jsonc) -and -not (Test-Path $ocfile)) { $ocfile = $jsonc }
+            $ocentry = [pscustomobject]@{ type="local"; command=@($python,$serverPath); enabled=$true }
+            return Set-JsonConfig $ocfile "mcp" $name $ocentry
+        }
+        "codex" {
+            $codex = ExistingCommand "codex"
+            if (-not $codex) {
+                Warn "Codex detected, but CLI is not on PATH. Skipping: install/expose Codex CLI, then rerun setup. No config was overwritten."
+                return $false
+            }
+            # Codex's own CLI edits TOML without discarding unrelated configuration.
+            & $codex mcp get $name *> $null
+            if ($LASTEXITCODE -eq 0) {
+                & $codex mcp remove $name
+                if ($LASTEXITCODE -ne 0) { Warn "Could not replace existing Codex entry $name"; return $false }
+            }
+            & $codex mcp add $name -- $python $serverPath
+            if ($LASTEXITCODE -ne 0) { Warn "Codex registration failed for $name"; return $false }
+            Note "Configured $name for Codex"
+            return $true
+        }
+        "claude-code" {
+            $claude = ExistingCommand "claude"
+            if (-not $claude) { Warn "Claude Code CLI not found; skipped"; return $false }
+            & $claude mcp remove $name -s user *> $null
+            & $claude mcp add --scope user --transport stdio $name -- $python $serverPath
+            if ($LASTEXITCODE -ne 0) { Warn "Claude Code registration failed for $name"; return $false }
+            Note "Configured $name for Claude Code"
+            return $true
+        }
+    }
+    Warn "Unknown client: $client"
+    return $false
+}
+try {
+    if ($env:OS -ne "Windows_NT") { Fail "This installer requires Windows (SolidWorks COM)." }
+    Note "SolidWorks MCP setup: $Root"
+    $python = Resolve-Python
+    $venv = Join-Path $Root ".venv"
+    $venvPython = Join-Path $venv "Scripts\python.exe"
+    if (-not (Test-Path $venvPython)) {
+        Note "Creating isolated Python environment in .venv"
+        & $python -m venv $venv
+        if ($LASTEXITCODE -ne 0) { Fail "Failed to create .venv. Ensure Python venv is installed." }
+    }
+    $venvVersion = & $venvPython -c "import sys; print('%s.%s' % sys.version_info[:2])"
+    if ($LASTEXITCODE -ne 0 -or [version]$venvVersion -lt [version]"3.10") {
+        Fail "Existing .venv has an incompatible/broken Python. Back it up or remove it and rerun setup."
+    }
+    Note "Installing requirements in isolated .venv"
+    & $venvPython -m pip install -r (Join-Path $Root "requirements.txt")
+    if ($LASTEXITCODE -ne 0) { Fail "Dependency installation failed; check pip output above." }
+    & $venvPython -c "from mcp.server.fastmcp import FastMCP; import win32com.client"
+    if ($LASTEXITCODE -ne 0) { Fail "MCP or pywin32 import test failed. See output above." }
+    $installs = @(Get-SolidWorks)
+    foreach ($sw in $installs) { Note "SolidWorks $($sw.Year) ($($sw.ProgId)) detected" }
+    if (-not $installs.Count) { Warn "No versioned SolidWorks COM registration detected; server registration can proceed, but connection may fail." }
+    if ($Server -eq "Auto") {
+        if ($installs.Count -eq 0) { $Server = "Modern"; Warn "Defaulting to modern server; verify your SolidWorks version." }
+        elseif (($installs | Where-Object Major -eq 19).Count -gt 0 -and ($installs | Where-Object Major -ge 20).Count -gt 0) { $Server = "Both" }
+        elseif (($installs | Where-Object Major -eq 19).Count -gt 0) { $Server = "2011" }
+        else { $Server = "Modern" }
+    }
+    $targets = @()
+    if ($Server -in @("Modern","Both")) { $targets += [pscustomobject]@{ Name="solidworks"; Path=(Join-Path $Root "server.py") } }
+    if ($Server -in @("2011","Both")) { $targets += [pscustomobject]@{ Name="solidworks2011"; Path=(Join-Path $Root "sw2011\server.py") } }
+    $selected = @()
+    if ($AllClients) { $selected = $SupportedClients }
+    elseif ($Clients.Count -gt 0) { $selected = $Clients }
+    else { $selected = @(Detect-Clients) }
+    $selected = @($selected | Select-Object -Unique)
+    if (-not $selected.Count) {
+        Warn "No known MCP clients detected. Install a client and rerun, or use -Clients cursor,codex etc."
+        exit 0
+    }
+    foreach ($client in $selected) { if ($client -notin $SupportedClients) { Fail "Unknown client '$client'. Choose from: $($SupportedClients -join ', ')" } }
+    Note "Selected clients: $($selected -join ', ')"
+    foreach ($target in $targets) {
+        if (-not (Test-Path $target.Path)) { Fail "Server file missing: $($target.Path)" }
+        foreach ($client in $selected) {
+            try { [void](Register-Client $client $target.Name $venvPython $target.Path) }
+            catch { Warn "Failed $client / $($target.Name): $_" }
+        }
+    }
+    Note "Finished. Restart configured clients and enable their MCP servers if prompted."
+} catch {
+    Write-Host "[ERROR] $_" -ForegroundColor Red
+    exit 1
+}
