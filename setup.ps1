@@ -90,7 +90,7 @@ function Set-JsonConfig($path,$section,$name,$entry) {
         if ($raw.Trim()) {
             try { $config = $raw | ConvertFrom-Json -ErrorAction Stop }
             catch {
-                Warn "Skipped $path: cannot safely parse existing JSON/JSONC. Existing settings were not changed. Remove comments manually or configure this client yourself."
+                Warn "Skipped ${path}: cannot safely parse existing JSON/JSONC. Existing settings were not changed. Remove comments manually or configure this client yourself."
                 return $false
             }
         }
