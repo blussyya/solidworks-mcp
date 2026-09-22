@@ -1,0 +1,62 @@
+name: Package v1.2.0 release
+
+on:
+  push:
+    branches: [main]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    # One-time release, triggered by the intended PR merge, not every push to main.
+    if: contains(github.event.head_commit.message, 'Release v1.2.0:')
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Validate Python syntax
+        run: python -m compileall -q server.py connection.py diagnose.py tools sw2011
+      - name: Validate PowerShell setup syntax
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $errors = $null
+          [System.Management.Automation.Language.Parser]::ParseFile((Resolve-Path setup.ps1), [ref]$tokens, [ref]$errors) | Out-Null
+          if ($errors.Count -gt 0) {
+            $errors | ForEach-Object { Write-Error $_.Message }
+            exit 1
+          }
+      - name: Assemble Windows source ZIP
+        shell: pwsh
+        run: |
+          $dest = "dist/solidworks-mcp-v1.2.0"
+          New-Item -ItemType Directory -Path $dest -Force | Out-Null
+          @("README.md", ".gitignore", "setup.bat", "setup.ps1", "requirements.txt", "connection.py", "diagnose.py", "server.py", "tools", "sw2011") |
+            ForEach-Object { Copy-Item -LiteralPath $_ -Destination $dest -Recurse -Force -ErrorAction Stop }
+          # No .git, .github, virtualenv or bytecode: package only source and installer.
+          Get-ChildItem -Path $dest -Recurse -Directory -Filter "__pycache__" | Remove-Item -Recurse -Force
+          Get-ChildItem -Path $dest -Recurse -File -Filter "*.pyc" | Remove-Item -Force
+          Compress-Archive -Path $dest -DestinationPath "dist/solidworks-mcp-v1.2.0.zip" -CompressionLevel Optimal -Force
+          if (-not (Test-Path "dist/solidworks-mcp-v1.2.0.zip")) { throw "ZIP was not created" }
+      - name: Publish v1.2.0 GitHub Release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $notes = @'
+          ## v1.2.0 — Automatic MCP setup
+
+          - Detect Python 3.10+; report incompatible installations.
+          - Install dependencies into an isolated local virtual environment.
+          - Discover SolidWorks 2011 / modern versions and installed MCP clients.
+          - Register Claude Desktop, Claude Code, Codex CLI, Cursor, OpenCode, Windsurf, Gemini CLI and VS Code where supported.
+          - Back up and preserve existing client configuration; report unsupported configurations.
+          - Run setup.bat after extracting the ZIP on Windows.
+
+          Windows SolidWorks integration must be tested on a computer with SolidWorks installed.
+          '@
+          $notes | Set-Content -Path "dist/release-notes.md"
+          gh release create v1.2.0 "dist/solidworks-mcp-v1.2.0.zip" --target "$env:GITHUB_SHA" --title "v1.2.0 - Automatic MCP setup" --notes-file "dist/release-notes.md"
