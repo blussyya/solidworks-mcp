@@ -1,0 +1,118 @@
+name: Publish v1.2.0
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - .github/workflows/release-v1.2.yml
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  package:
+    runs-on: windows-latest
+    steps:
+      - name: Check out main
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Validate Python source syntax
+        shell: pwsh
+        run: |
+          $files = @(Get-ChildItem -Path tools,sw2011 -Recurse -Filter *.py -File) +
+                   @(Get-Item connection.py,diagnose.py,server.py)
+          foreach ($file in $files) {
+            python -m py_compile $file.FullName
+            if ($LASTEXITCODE -ne 0) { throw "Python syntax failed: $($file.FullName)" }
+          }
+
+      - name: Validate PowerShell installer syntax
+        shell: pwsh
+        run: |
+          $tokens = $null
+          $parseErrors = $null
+          [void][System.Management.Automation.Language.Parser]::ParseFile(
+            (Resolve-Path setup.ps1).Path,
+            [ref]$tokens,
+            [ref]$parseErrors
+          )
+          if ($parseErrors.Count -gt 0) {
+            foreach ($issue in $parseErrors) {
+              Write-Host ("{0}: {1}" -f $issue.Extent.StartLineNumber, $issue.Message) -ForegroundColor Red
+            }
+            throw "setup.ps1 failed PowerShell syntax validation."
+          }
+
+      - name: Package release ZIP
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $stage = Join-Path $PWD "dist\solidworks-mcp"
+          New-Item -ItemType Directory -Path $stage -Force | Out-Null
+
+          $include = @(
+            "README.md", ".gitignore", "setup.bat", "setup.ps1",
+            "requirements.txt", "connection.py", "diagnose.py",
+            "server.py", "tools", "sw2011"
+          )
+          foreach ($item in $include) {
+            Copy-Item -LiteralPath $item -Destination $stage -Recurse -Force
+          }
+
+          Get-ChildItem -Path $stage -Recurse -Directory -Filter __pycache__ |
+            Remove-Item -Force -Recurse
+          Get-ChildItem -Path $stage -Recurse -File -Filter *.pyc |
+            Remove-Item -Force
+
+          $archive = Join-Path $PWD "dist\solidworks-mcp-v1.2.0.zip"
+          Compress-Archive -Path $stage -DestinationPath $archive -CompressionLevel Optimal -Force
+
+          Add-Type -AssemblyName System.IO.Compression
+          $zip = [System.IO.Compression.ZipFile]::OpenRead($archive)
+          try {
+            $names = @($zip.Entries | ForEach-Object FullName)
+            foreach ($required in @(
+              "solidworks-mcp/setup.bat",
+              "solidworks-mcp/setup.ps1",
+              "solidworks-mcp/server.py",
+              "solidworks-mcp/sw2011/server.py"
+            )) {
+              if ($required -notin $names) { throw "ZIP missing $required" }
+            }
+            Write-Host "Packaged $($names.Count) entries."
+          } finally {
+            $zip.Dispose()
+          }
+
+      - name: Publish GitHub Release v1.2.0
+        shell: pwsh
+        env:
+          GH_TOKEN: \${{ github.token }}
+        run: |
+          $ErrorActionPreference = "Stop"
+          $notes = @'
+          Automatic MCP installer for Python 3.10+ and multiple SolidWorks versions.
+
+          - Detects Python installations and reports unsupported versions.
+          - Creates a local virtual environment and validates dependencies.
+          - Detects installed MCP clients and configures supported integrations.
+          - Supports separate modern SolidWorks and SolidWorks 2011 MCP servers.
+          - Backs up existing client configurations before editing them.
+
+          Extract solidworks-mcp-v1.2.0.zip and run setup.bat on Windows.
+          '@
+          $notes | Set-Content -Path dist\release-notes.md -Encoding utf8
+
+          gh release view v1.2.0 *> $null
+          if ($LASTEXITCODE -eq 0) {
+            throw "Release v1.2.0 already exists; refusing to overwrite it."
+          }
+          gh release create v1.2.0 "dist/solidworks-mcp-v1.2.0.zip" --target "$env:GITHUB_SHA" --title "v1.2.0 - Automatic MCP Setup" --notes-file "dist/release-notes.md"
+          if ($LASTEXITCODE -ne 0) { throw "GitHub Release publishing failed." }
