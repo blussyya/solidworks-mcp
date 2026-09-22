@@ -57,7 +57,7 @@ pip install -r requirements.txt
 }
 ```
 
-Or run `setup.bat` and choose option 4 (Claude Desktop) or 5 (opencode).
+Run `setup.bat` in the repository root to auto-detect the installed SolidWorks version and MCP clients. For only this server, use `powershell -ExecutionPolicy Bypass -File setup.ps1 -Server 2011` in the repository root. The installer creates a `.venv` and configures supported clients without requiring manual config edits.
 
 ## Which install it attaches to
 

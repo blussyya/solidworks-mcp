@@ -20,36 +20,26 @@ so they're guaranteed to be correct for your install rather than a guess.
 
 ## Setup
 
-**Easiest way:** download the [latest release](https://github.com/blussyya/solidworks-mcp/releases/latest) and run `setup.bat`. It detects everything and configures for you.
+**Windows only.** Install SolidWorks and Python 3.10+ (Python 3.11–3.13 are reasonable choices), then run `setup.bat` from the repository folder. No Python dependencies are installed globally: the installer creates/reuses `.venv`, installs `requirements.txt`, and verifies the MCP and COM imports before registering clients.
 
-Or manually:
+The installer detects compatible Python interpreters (including the Windows Python launcher), reports incompatible versions, detects registered SolidWorks versions, and configures **detected** MCP clients. Supported clients: Claude Desktop, Claude Code CLI, OpenAI Codex CLI, Cursor, OpenCode, Windsurf, Gemini CLI and VS Code (GitHub Copilot MCP). It registers `solidworks` for modern SolidWorks and/or `solidworks2011` for SolidWorks 2011. Multiple detected SolidWorks versions can be registered together.
 
-1. **Python on Windows.** 3.10+, installed on the same Windows machine as SolidWorks
-   
+Existing JSON settings are retained and backed up before changes. If an existing JSONC config has comments or trailing commas that PowerShell cannot safely parse, setup **skips that config** instead of overwriting it. Codex and Claude Code are configured using their own CLI commands; they must be on `PATH` for automatic registration. A Codex desktop installation without the CLI is detected but cannot be configured automatically by this installer.
 
-2. Open a terminal in this folder and install dependencies:
-   ```
-   pip install -r requirements.txt
-   ```
+PowerShell options (run from the repository folder):
 
-Or just ask whatever agent you use to set it up for you
-
-## opencode config reference
-
-The key section to add to your `opencode.jsonc`:
-
-```jsonc
-{
-  "mcp": {
-    "solidworks": {
-      "type": "local",
-      "command": ["python", "C:\\path\\to\\solidworks-mcp\\opencode\\server.py"],
-      "cwd": "C:\\path\\to\\solidworks-mcp\\opencode",
-      "enabled": true
-    }
-  }
-}
+```powershell
+.\setup.ps1                        # auto-detect versions and clients
+.\setup.ps1 -Server Modern         # modern SolidWorks only
+.\setup.ps1 -Server 2011           # SolidWorks 2011 only
+.\setup.ps1 -Server Both           # register separate modern/2011 servers
+.\setup.ps1 -Clients cursor        # configure Cursor explicitly
+.\setup.ps1 -AllClients            # attempt every supported client (including absent ones)
 ```
+
+`setup.bat` passes arguments through to the PowerShell installer. The MCP command uses the absolute path to this repository's `.venv\Scripts\python.exe`. Keep the repository in place afterward; moving it requires rerunning setup. Restart the configured client and approve/enable its MCP server if prompted.
+
+**Manual alternative:** create a Python 3.10+ virtual environment, install `requirements.txt` there, and configure your client with the environment's `python.exe` and this repository's root `server.py` (or `sw2011\server.py`).
 
 ## Example workflow
 
